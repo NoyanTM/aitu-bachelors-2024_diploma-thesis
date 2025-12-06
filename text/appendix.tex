@@ -1,0 +1,1128 @@
+\chapter{Code listing of web scraping part}
+
+File path - ``etl\_pipeline/httpx.py'':
+\begin{lstlisting}
+import httpx
+from fake_useragent import FakeUserAgent
+
+def get_response_main(
+    url: str,
+    response_type: str,
+    user_agent: str = None,
+    timeout: float = 30.0,
+    params: dict = None # query params
+):
+    # set timeout config
+    timeout_config = httpx.Timeout(timeout)
+
+    # generate random user agent metadata
+    random_user_agent = FakeUserAgent().random
+
+    # custom headers
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "User-Agent": user_agent if user_agent is not None else random_user_agent,
+    }
+
+    # start httpx session
+    with httpx.Client(headers=headers, timeout=timeout_config) as client:
+        response = client.get(url=url, params=params)
+
+    if response_type == "html":
+        return response.text
+    
+    if response_type == "json":
+        return response.json()
+\end{lstlisting}
+
+\clearpage
+
+File path - ``etl\_pipeline/schemas.py'':
+\begin{lstlisting}
+from enum import Enum
+
+class LanguageTypeMain(Enum):
+    ENGLISH = 1
+    KAZAKH = 2
+    RUSSIAN = 3
+
+
+language_dict = {
+    LanguageTypeMain.ENGLISH: "en",
+    LanguageTypeMain.KAZAKH: "kz",
+    LanguageTypeMain.RUSSIAN: "ru",
+}
+\end{lstlisting}
+
+\clearpage
+
+File path - ``etl\_pipeline/pipeline\_afsa\_main.py'':
+\begin{lstlisting}
+import re
+import json
+import json
+import time
+from pathlib import Path
+from unicodedata import normalize
+
+from dateutil.parser import parse
+from tqdm import tqdm
+from bs4 import BeautifulSoup
+from pydantic import AnyUrl
+
+from src.etl_pipeline.httpx import get_response_main
+from src.etl_pipeline.schemas import language_dict
+from src.chats.llm import LLMService
+
+base_url = "https://afsa.aifc.kz/api/search"
+subdomains_list = ["", "court", "authority", "afsa", "iac", "tech", "bcpd", "gfc", "expatcentre", "aol", "itrp"] # "" - aifc
+
+def get_api_json():
+    for key, value in tqdm(language_dict.items(), position=0, desc=f"Language"):
+        Path(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/").mkdir(parents=True, exist_ok=True)
+        for subdomain in tqdm(subdomains_list, position=1, desc="Subdomain", leave=False):
+            params = {
+                "lang": key.value,
+                "siteUrl": subdomain,
+            }
+            response = get_response_main(url=base_url, response_type="json", params=params)
+            with open(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/{subdomain if subdomain else 'aifc'}.json", "w", encoding="utf-8") as file:
+                json_object = json.dumps(response, indent=4, ensure_ascii=False)
+                file.write(json_object)
+
+def transform_and_compare_json_files():
+    for key, value in tqdm(language_dict.items(), position=0, desc="Language"):
+        files = list(Path(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/").glob(pattern="*.json"))
+        for file in tqdm(files, position=1, desc="File", leave=False):
+            json_data = json.loads(file.read_text(encoding="utf-8"))        
+            if file.name == "aifc.json":
+                data_list = []
+                data_set = set()
+                for data in json_data:
+                    if data["site"] == 1:
+                        data.pop("site_url")
+                        data.pop("site")
+                        if data["id"] not in data_set:
+                            data_list.append(data)
+                            data_set.add(data["id"])
+                with open(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/aifc.json", "w", encoding="utf-8") as file:
+                    json_object = json.dumps(data_list, indent=4, ensure_ascii=False)
+                    file.write(json_object)
+            else:
+                data_list = []
+                data_set = set()
+                for data in json_data:
+                    data.pop("site_url")
+                    data.pop("site")
+                    if data["id"] not in data_set:
+                        data_list.append(data)
+                        data_set.add(data["id"])
+                with open(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/{file.name}", "w", encoding="utf-8") as file:
+                    json_object = json.dumps(data_list, indent=4, ensure_ascii=False)
+                    file.write(json_object)  
+
+
+def group_json_files():
+    for key, value in tqdm(language_dict.items(), position=0, desc="Language"):
+        files = list(Path(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/").glob(pattern="*.json")) 
+        
+        news_list = []
+        events_list = []
+        pages_list = []
+        Path(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/news/").mkdir(parents=True, exist_ok=True)
+        Path(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/events/").mkdir(parents=True, exist_ok=True)
+        Path(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/pages/").mkdir(parents=True, exist_ok=True)
+        
+        for file in tqdm(files, position=1, desc="File", leave=False):
+            json_data = json.loads(file.read_text(encoding="utf-8"))
+            for data in json_data:
+                data.update({"group": str(file.name.replace(".json", ""))})                        
+                if data["module"] == "news":
+                    news_list.append(data)
+                if data["module"] == "events":
+                    events_list.append(data)
+                if data["module"] == "pages":
+                    pages_list.append(data)
+                
+        with open(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/news/news.json", "w", encoding="utf-8") as file:
+                json_object = json.dumps(news_list, indent=4, ensure_ascii=False)
+                file.write(json_object)
+        with open(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/events/events.json", "w", encoding="utf-8") as file:
+                json_object = json.dumps(events_list, indent=4, ensure_ascii=False)
+                file.write(json_object)
+        with open(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/pages/pages.json", "w", encoding="utf-8") as file:
+                json_object = json.dumps(pages_list, indent=4, ensure_ascii=False)
+                file.write(json_object)
+
+
+def get_news_data():
+    for key, value in tqdm(language_dict.items(), position=0, desc=f"Language"):
+        directories = ["events", "news", "pages"]
+        for directory in directories:
+            Path(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/{directory}/html").mkdir(parents=True, exist_ok=True)
+            Path(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/{directory}/image").mkdir(parents=True, exist_ok=True)
+            Path(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/{directory}/txt/").mkdir(parents=True, exist_ok=True)
+            # TODO: also need pdf, csv, excel, transcript, etc. # html / clean txt, images, transcript, audio (if video with link)
+
+    values = ["en", "ru", "kk"]
+    for value in values:
+        with open(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/news/news.json", "r", encoding="utf-8") as file:
+            json_data = json.load(file)
+        files = list(Path(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/").glob(pattern="*.json"))
+        file_names = [file.stem for file in files if file.stem is not None] # if file.stem
+        for idx, name in enumerate(tqdm(file_names, position=1, desc="Group", leave=False)):
+            filtered_list = []
+            for data in json_data:
+                if data["group"] == name:
+                    if data["url"] and data["url"] is not AnyUrl:
+                        if name == "aifc":
+                            url = f"https://aifc.kz/{value}/news/{data['url']}/"
+                        else:
+                            url = f"https://{name}.aifc.kz/{value}/news/{data['url']}/"
+                        filtered_data = {
+                            "id": int(data["id"]),
+                            "title": str(data["name"]),
+                            "url": str(url),
+                            "endpoint": str(data['url']),
+                        }
+                        filtered_list.append(filtered_data)
+            for data in tqdm(filtered_list, desc="Url", leave=False):
+                response_html = get_response_main(url=data["url"], response_type="html")
+                # time.sleep(5)
+                
+                with open(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/news/html/{name}_{data['id']}.html", "w", encoding="utf-8") as file:
+                    file.write(response_html)
+                
+                soup = BeautifulSoup(markup=response_html, features="lxml")
+                document_data = soup.select("div.col-12.col-lg-7") # div, p, li, a
+                
+                for document in document_data:                    
+                    title = document.select_one("div[class=article-title]").text.strip()
+                    datetime = parse(document.select_one("div.article-head.mt-2 > div[class=time]").getText(strip=True)).isoformat()
+                    image_link = document.select_one("div[class=article-main-image] img")["src"]
+                    
+                    for tag in document.select("div.article-title, div.article-head.mt-2, div.mt-4, div.article-main-image"): 
+                        tag.decompose() # tag.extract
+                    
+                    page_content = normalize("NFKD", document.text.strip())
+                    page_content_stripped = re.sub(r"\s\s+", " ", page_content)
+                    
+                    with open(f"./src/etl_pipeline/extracted_data/afsa_main/{value}/news/txt/{name}_{data['id']}.txt", "w", encoding="utf-8") as file:
+                        file.write(page_content_stripped)
+                    
+                    metadata = {
+                        "source": data["url"],
+                        "id": data["id"],
+                        "site": name,
+                        "category": "news",
+                        "title": title, # data["title"]
+                        "created_at": datetime,
+                        "language": value,
+                    }
+                    
+                    LLMService.upload_langchain_document(
+                        page_content=page_content_stripped,
+                        metadata=metadata,
+                    )
+                
+                time.sleep(2)
+
+def main():
+    get_api_json()
+    transform_and_compare_json_files()
+    group_json_files()
+    get_news_data()
+
+if __name__ == "__main__":
+    main()
+\end{lstlisting}
+
+\clearpage
+
+\chapter{Code listing of backend service part}
+File path - ``src/models/base.py'':
+\begin{lstlisting}
+import uuid
+from datetime import datetime
+from typing import Annotated, Any, Annotated
+
+from sqlalchemy import Null, String, DateTime, func, MetaData, JSON, Text
+from sqlalchemy.orm import DeclarativeBase, mapped_column
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+
+# Custom data types
+intpk = Annotated[int, mapped_column(primary_key=True, autoincrement=True)]
+uuidpk = Annotated[uuid.UUID, mapped_column(UUID, primary_key=True, default=uuid.uuid4)]
+jsonb = Annotated[dict[str, Any], mapped_column(JSONB)]
+json = Annotated[dict[str, Any], mapped_column(JSON)]
+text = Annotated[str, mapped_column(Text)]
+
+str_512 = Annotated[str, 512]
+str_256 = Annotated[str, 256]
+str_128 = Annotated[str, 256]
+str_64 = Annotated[str, 64]
+str_32 = Annotated[str, 32]
+
+created_at = Annotated[datetime, mapped_column(DateTime(timezone=True), server_default=func.now())]
+updated_at = Annotated[datetime, mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())]
+deleted_at = Annotated[datetime | None, mapped_column(DateTime(timezone=True), server_default=Null())]
+
+# Optional - setting indexes naming accoring to specific DB convention
+POSTGRES_INDEXES_NAMING_CONVENTION = {
+    "ix": "%(column_0_label)s_idx",
+    "uq": "%(table_name)s_%(column_0_name)s_key",
+    "ck": "%(table_name)s_%(constraint_name)s_check",
+    "fk": "%(table_name)s_%(column_0_name)s_fkey",
+    "pk": "%(table_name)s_pkey",
+}
+
+
+# Collection for tables
+class Base(DeclarativeBase):
+    metadata = MetaData(naming_convention=POSTGRES_INDEXES_NAMING_CONVENTION)
+
+    type_annotation_map = {
+        str_512: String(512),
+        str_256: String(256),
+        str_128: String(128),
+        str_64: String(64),
+        str_32: String(32),
+    }
+\end{lstlisting}
+
+\clearpage
+
+File path - ``src/models/chats.py'':
+\begin{lstlisting}
+from uuid import UUID
+from typing import TYPE_CHECKING
+
+from sqlalchemy import ForeignKey
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from src.models.base import (
+    Base,
+    uuidpk,
+    str_128,
+    str_512,
+    created_at,
+    updated_at,
+    deleted_at,
+)
+
+if TYPE_CHECKING:
+    from src.models.users import User
+    from src.models.messages import Message
+
+
+class Chat(Base):
+    __tablename__ = "chat"
+
+    uuid: Mapped[uuidpk]
+    title: Mapped[str_128 | None] # TODO: title can be: generated by llm so it is a short summary of conversation like in chatgpt app, or it can be edited by user itself
+    is_active: Mapped[bool] = mapped_column(default=True) # TODO: soft-delete / deactivation status
+    description: Mapped[str_512 | None] # TODO: description like medium context summary, but maybe it must be as seperate another table for this case
+    created_at: Mapped[created_at]
+    updated_at: Mapped[updated_at]
+    deleted_at: Mapped[deleted_at] # TODO: soft-delete / deactivate datetime - need to make business logic for that
+
+    user_uuid: Mapped[UUID] = mapped_column(ForeignKey("user.uuid"))
+    user: Mapped["User"] = relationship(back_populates="chat")
+    
+    message: Mapped[list["Message"]] = relationship(back_populates="chat")
+
+    def __repr__(self):
+        return f"Chat(uuid={self.uuid}, title={self.title})"
+\end{lstlisting}
+
+\clearpage
+
+File path - ``src/models/messages.py'':
+\begin{lstlisting}
+from uuid import UUID
+from typing import TYPE_CHECKING
+
+from sqlalchemy import ForeignKey
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from src.models.base import (
+    Base,
+    uuidpk,
+    text,
+    jsonb,
+    created_at,
+    updated_at,
+    deleted_at,
+)
+
+if TYPE_CHECKING:
+    from src.models.chats import Chat
+
+
+class Message(Base):
+    __tablename__ = "message"
+
+    uuid: Mapped[uuidpk]
+    content: Mapped[text]
+    additional_metadata: Mapped[jsonb | None] # TODO: metadata or something add message tag (user / system) in order to understand which one is and what operation was or other params here
+    is_active: Mapped[bool] = mapped_column(default=True) # TODO: soft-delete / deactivation status
+    created_at: Mapped[created_at]
+    updated_at: Mapped[updated_at]
+    deleted_at: Mapped[deleted_at] # TODO: soft-delete / deactivate datetime - need to make business logic for that
+
+    chat_uuid: Mapped[UUID | None] = mapped_column(ForeignKey("chat.uuid")) # TODO: delete "| None" because message must be within specific chat
+    chat: Mapped["Chat"] = relationship(back_populates="message")
+
+    def __repr__(self):
+        return f"Message(uuid={self.uuid}, content={self.content})"
+\end{lstlisting}
+
+\clearpage
+
+File path - ``src/models/users.py'':
+\begin{lstlisting}
+from enum import Enum
+from typing import TYPE_CHECKING
+
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from src.models.base import (
+    Base,
+    uuidpk,
+    str_128,
+    created_at,
+    updated_at,
+    deleted_at,
+    text
+)
+
+if TYPE_CHECKING:
+    from src.models.chats import Chat
+
+
+class Role(str, Enum):
+    USER = "USER"
+    MODERATOR = "MODERATOR"
+    ADMIN = "ADMIN"
+
+
+class User(Base):
+    __tablename__ = "user"
+
+    uuid: Mapped[uuidpk]
+    name: Mapped[str_128]
+    email: Mapped[str_128] = mapped_column(unique=True)
+    hashed_password: Mapped[str_128]
+    role: Mapped["Role"] = mapped_column(default=Role.USER)
+    photo_url: Mapped[text | None] # TODO: need minio or other s3 bucket
+    is_active: Mapped[bool] = mapped_column(default=True) # TODO: soft-delete / deactivation status
+    created_at: Mapped[created_at]
+    updated_at: Mapped[updated_at]
+    deleted_at: Mapped[deleted_at] # TODO: soft-delete / deactivate datetime - need to make business logic for that
+    
+    chat: Mapped[list["Chat"]] = relationship(back_populates="user")
+    
+    def __repr__(self):
+        return f"User(uuid={self.uuid}, name={self.name}, email={self.email})"
+\end{lstlisting}
+
+\clearpage
+
+File path - ``src/postgres.py'':
+\begin{lstlisting}
+from typing import Annotated, AsyncGenerator, Annotated
+
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
+
+from src.config import settings
+from src.exceptions import DatabaseException
+
+# Engine connection configuration, use "echo=True" only when debugging application (not in prduction)
+engine = create_async_engine(url=f"{settings.POSTGRES_URL}", echo=True)
+
+# For session factory in everywhere "async with async_session_maker() as session:"
+async_session_maker = async_sessionmaker(
+    bind=engine,
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False,
+)
+
+# For dependency injection in only routers usually "Depends(get_async_session)"
+async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
+    async with async_session_maker() as session:
+        try:
+            yield session
+        except SQLAlchemyError as e:
+            print("Database exception:", e)
+            await session.rollback()
+            raise DatabaseException
+        finally:
+            await session.close()
+
+# Optional short passing async session via annotated even instead of "session: AsyncSession = Depends(get_async_session)"
+AsyncDep = Annotated[AsyncSession, Depends(get_async_session)]
+\end{lstlisting}
+
+\clearpage
+
+File path - ``src/auth/password.py'':
+\begin{lstlisting}
+import re
+import math
+import string
+
+from argon2 import PasswordHasher
+from argon2.exceptions import (
+    HashingError,
+    VerifyMismatchError,
+    VerificationError,
+    InvalidHashError,
+)
+
+from src.config import settings
+
+
+class ArgonPasswordHashing:
+    ph = PasswordHasher(
+        salt_len=settings.ARGON_SALT_LEN,
+        hash_len=settings.ARGON_HASH_LEN,
+        time_cost=settings.ARGON_TIME_COST,
+        memory_cost=settings.ARGON_MEMORY_COST,
+        parallelism=settings.ARGON_PARALLELISM,
+    )
+
+    @classmethod
+    def hash_password(cls, password: str) -> str:
+        try:
+            return cls.ph.hash(password)
+        except HashingError:
+            return None
+
+    @classmethod
+    def verify_password(cls, password: str, hashed_password: str) -> bool:
+        try:
+            return cls.ph.verify(hashed_password, password)
+        except (VerifyMismatchError, VerificationError):
+            return False
+
+    @classmethod
+    def verify_password_rehash(cls, hashed_password: str) -> bool:
+        try:
+            return cls.ph.check_needs_rehash(hashed_password)
+        except InvalidHashError:
+            return False
+
+
+class PasswordValidation:
+    ASCII_LIMITED_CHARACTERS = string.ascii_uppercase + string.ascii_lowercase + string.digits + string.punctuation
+    REGEX_PASSWORD_PATTERN = re.compile(r"^(?=.*[\d])(?=.*[A-Z])(?=.*[a-z])(?=.*[!@#$%^&*])[A-Za-z0-9!@#$%^&*]{12,128}$")
+    PASSWORD_ENTROPY_POINTS = 32
+    
+    @classmethod
+    def verify_password_entropy(cls, password: str, option: bool = False) -> int:
+        unique_characters = cls.ASCII_LIMITED_CHARACTERS if option else set(password)
+        entropy_bits = round(math.log2(len(unique_characters) ** len(password)))
+        return True if entropy_bits > cls.PASSWORD_ENTROPY_POINTS else False
+
+    @classmethod
+    def verify_password_pattern(cls, password: str):
+        return re.match(cls.REGEX_PASSWORD_PATTERN, password)
+\end{lstlisting}
+
+\clearpage
+
+File path - ``src/auth/jwt.py'':
+\begin{lstlisting}
+from datetime import datetime, timedelta, timezone
+
+import jwt
+
+from src.config import settings
+
+
+class JWT:
+    def encode_jwt(
+        data: dict,
+        secret_key: str,
+        algorithm: str = settings.JWT_ALGORITHM,
+        expire_seconds: int = settings.ACCESS_TOKEN_EXPIRE_SECONDS,
+        expire_timedelta: timedelta | None = None,
+    ) -> str:
+        payload = data.copy()
+        now = datetime.now(timezone.utc)
+        if expire_timedelta:
+            expire = now + expire_timedelta
+        else:
+            expire = now + timedelta(seconds=expire_seconds)
+        payload.update(
+            exp=expire,
+            iat=now,
+        )
+        encoded_jwt = jwt.encode(
+            payload=payload,
+            key=secret_key,
+            algorithm=algorithm,
+        )
+        return encoded_jwt
+
+    def decode_jwt(
+        token: str | bytes,
+        secret_key: str,
+        algorithm: str = settings.JWT_ALGORITHM,
+        # audience: List[str]
+    ) -> dict: # Dict[str, Any]
+        decoded_jwt = jwt.decode(
+            jwt=token,
+            key=secret_key,
+            algorithms=[algorithm],
+            # audience=audience
+        )
+        return decoded_jwt
+\end{lstlisting}
+
+\clearpage
+
+File path - ``src/auth/dependencies.py'':
+\begin{lstlisting}
+from typing import Annotated
+
+from fastapi import Depends
+from fastapi.security import OAuth2PasswordBearer
+from jwt import PyJWTError
+
+from src.users.services import UserService
+from src.auth.jwt import JWT
+from src.auth.schemas import TokenData
+from src.users.schemas import UserRead
+from src.config import settings
+from src.postgres import AsyncDep
+from src.users.exceptions import (
+    NotAuthenticatedException,
+    InsufficientPermissionsException,
+)
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl='/auth/create-token') # /auth/login
+
+
+async def get_token_payload(
+    token: Annotated[str, Depends(oauth2_scheme)]
+):
+    try:
+        payload = JWT.decode_jwt(
+            secret_key=settings.ACCESS_SECRET_KEY,
+            token=token
+        )
+    except PyJWTError:
+        raise NotAuthenticatedException
+    return payload
+
+
+async def get_current_user( # merged with get_current_active_user
+    session: AsyncDep,
+    payload: Annotated[dict, Depends(get_token_payload)],
+) -> UserRead:
+    username = payload.get("sub")
+    if username is None: 
+        raise NotAuthenticatedException
+    token_data = TokenData(username=username)
+    user = await UserService(session).get_user_by_email(user_email=token_data.username)
+    if user is None:
+        raise NotAuthenticatedException
+    if not user.is_active:
+        raise NotAuthenticatedException
+    return user
+
+
+class RBAC:
+    def __init__(self, *allowed_roles):
+        self.allowed_roles = allowed_roles
+    
+    def __call__(self, current_user: Annotated[UserRead, Depends(get_current_user)]):
+        if current_user.role not in self.allowed_roles:
+            raise InsufficientPermissionsException
+        return True
+\end{lstlisting}
+
+\clearpage
+
+File path - ``src/chats/llm.py'':
+\begin{lstlisting}
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough, RunnableParallel
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_openai import ChatOpenAI
+from langfuse.callback import CallbackHandler
+from langchain_postgres.vectorstores import PGVector, DistanceStrategy
+from langchain_postgres.chat_message_histories import PostgresChatMessageHistory
+from transformers import AutoTokenizer
+# from langchain.document_loaders import TextLoader
+
+
+from src.config import settings
+from src.chats.prompt_templates import rag_system_prompt
+
+
+class LLMService():
+    @classmethod
+    def init_langfuse_handler(cls):
+        langfuse_handler = CallbackHandler(
+            secret_key=settings.LANGFUSE_SECRET_KEY,
+            public_key=settings.LANGFUSE_PUBLIC_KEY,
+            host=settings.LANGFUSE_HOST,
+        )
+        return langfuse_handler
+    
+    @classmethod
+    def init_llm(cls):
+        llm = ChatOpenAI(
+            model="gpt-3.5-turbo",
+            openai_api_base="http://localhost:8080/v1",
+            temperature=0.0, # better to stay from 0.0 to 0.7
+            max_tokens=4096, # -1 - unlimited
+            openai_api_key="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", # any random string
+            # frequency_penalty
+            # presence_penalty
+            # streaming=True
+            # stop=[]
+        )
+        return llm
+
+    @classmethod
+    def init_embeddings(cls):
+        embeddings = HuggingFaceEmbeddings(
+            model_name = "./src/huggingface/bge-m3",
+            model_kwargs = {'device': 'cuda'}
+        )
+        return embeddings
+    
+    @classmethod
+    def init_tokenizer(cls):
+        tokenizer = AutoTokenizer.from_pretrained(
+            pretrained_model_name_or_path="./src/huggingface/bge-m3", # "google-bert/bert-base-multilingual-cased",
+            max_length = 2048,
+            truncation = True,
+            # padding="max_length"
+        )
+        return tokenizer
+    
+    @classmethod
+    def init_retriever(cls):
+        vectorstore = PGVector(
+            embeddings=cls.init_embeddings(),
+            distance_strategy=DistanceStrategy.COSINE,
+            collection_name="news", # TODO: choosing collection functionallity
+            connection = "postgresql+psycopg://postgres:postgres@localhost:5432/postgres",
+        )
+        retriever = vectorstore.as_retriever(
+            search_kwargs={"k": 3} # "k": 4 - TODO: choosing top n of k functionality (k = 5)
+        )
+        return retriever
+    
+    @classmethod
+    def init_rag_prompt(cls):
+        # TODO: chat history summury to prompt
+        base_rag_prompt = ChatPromptTemplate.from_messages([
+                ("system", rag_system_prompt),
+                ("human", "{question}"),
+        ])
+        return base_rag_prompt
+
+    @classmethod
+    def init_text_splitter(cls):
+        text_splitter = RecursiveCharacterTextSplitter.from_huggingface_tokenizer( # SemanticChunker
+            separators=["\n\n", "\n", " ", ""], # ["\n\n", "\n"],
+            tokenizer=cls.init_tokenizer(),
+            chunk_size=2048,
+            chunk_overlap=100,
+            # is_separator_regex=False,
+        )
+        return text_splitter
+
+    @classmethod
+    def upload_langchain_document(cls, page_content, metadata):
+        langchain_document = Document(page_content=page_content, metadata=metadata)
+        document_chunks = cls.init_text_splitter().split_documents([langchain_document])
+        db = PGVector.from_documents(
+            embedding=cls.init_embeddings(),
+            documents=document_chunks,
+            collection_name="news",
+            connection="postgresql+psycopg://postgres:postgres@localhost:5432/postgres",
+            use_jsonb=True,
+            pre_delete_collection=False,
+        )
+        # for docs in document_chunks: print(len(docs.page_content))
+        return db
+
+    @classmethod
+    def init_rag_chain(cls, question_text: str):
+        def format_docs(docs):
+            return "\n\n".join(doc.page_content for doc in docs)
+        
+        #     rag_chain = (
+        #         {"context": cls.init_retriever | cls.format_docs, "question": RunnablePassthrough()} #  lambda x: context_text
+        #         | cls.init_rag_prompt
+        #         | cls.init_llm # .bind(stop=["\nCypher query:", "\nUser input: "])
+        #         | StrOutputParser()
+        #     )
+        #     rag_chain.invoke(input = {"question": question_text}, config={"callbacks": [cls.init_langfuse_handler()]})
+        
+        rag_chain_from_docs = (
+            RunnablePassthrough.assign(context=(lambda x: format_docs(x["context"])))
+            | cls.init_rag_prompt()
+            | cls.init_llm() # .bind(stop=["\nCypher query:", "\nUser input: "])
+            | StrOutputParser()
+        )
+        
+        rag_chain_with_source = RunnableParallel(
+            {"context": cls.init_retriever(), "question": RunnablePassthrough()}
+        ).assign(answer = rag_chain_from_docs)
+        
+        output = rag_chain_with_source.invoke(input = question_text, config = {"callbacks": [cls.init_langfuse_handler()]}) # input = {"question": question_text}
+        return output
+\end{lstlisting}
+
+\clearpage
+
+File path - ``src/huggingface/config.json'':
+\begin{lstlisting}
+{
+    "host": "0.0.0.0",
+    "port": 8080,
+    "models": [
+        {
+            "model": "./src/huggingface/Meta-Llama-3-8B-Instruct-Q8_0.gguf",
+            "model_alias": "gpt-3.5-turbo",
+            "chat_format": "llama-3",
+            "n_gpu_layers": -1,
+            "offload_kqv": true,
+            "n_threads": 12,
+            "n_batch": 512,
+            "n_ctx": 8192
+        }
+    ]
+}
+\end{lstlisting}
+
+\clearpage
+
+File path - ``docker-compose.yml'':
+\begin{lstlisting}
+version: "3.9" # writing compose version is deprecated / obsolute
+services:
+  # 1. SQL Database (PostgreSQL)
+  postgres:
+    image: ankane/pgvector:v0.5.1
+    container_name: postgres_diploma
+    # build:
+    #   context: ./deploy/postgres/
+    #   dockerfile: ./Dockerfile
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data_diploma:/var/lib/postgres_data_diploma/data # default path - "/var/lib/postgresql/data"
+      - ./deploy/postgres/docker-entrypoint-initdb.d/pgvector.sql:/docker-entrypoint-initdb.d/init.sql # automatic initialization script for "CREATE EXTENSION vector;"
+    ports:
+      - "${POSTGRES_PORT_EXTERNAL}:${POSTGRES_PORT}" # if database must be only accessed locally - "127.0.0.1:${POSTGRES_PORT_EXTERNAL}:${POSTGRES_PORT}"
+    networks:
+      - diploma
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-p", "${POSTGRES_PORT}", "-U", "${POSTGRES_USER}"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+      start_interval: 5s
+  
+  # 2. Database Administration (PGAdmin)
+  pgadmin:
+    image: dpage/pgadmin4:8.5 # pgadmin:latest (if already locally installed image)
+    container_name: pgadmin_diploma
+    env_file:
+      - .env
+    environment:
+      PGADMIN_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      # PGADMIN_LISTEN_PORT: ${PGADMIN_PORT}
+    volumes:
+      - pgadmin_data_diploma:/var/lib/pgadmin_data_diploma # default path - "/var/lib/pgadmin"
+    ports:
+      - "${PGADMIN_PORT_EXTERNAL}:${PGADMIN_PORT}"
+    networks:
+      - diploma
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-O", "-", "http://localhost:${PGADMIN_PORT}/misc/ping"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+      start_interval: 5s
+
+  # 3. LLM Evaluation Platform (Langfuse)
+  langfuse:
+    image: langfuse/langfuse:2 # langfuse:latest (if already locally installed image)
+    container_name: langfuse_chatbot
+    env_file:
+      - .env
+    environment:
+      HOST: ${LANGFUSE_HOST} # optional
+      PORT: ${LANGFUSE_PORT} # optional
+      DATABASE_URL: ${POSTGRES_LANGFUSE_URL}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
+      SALT: ${LANGFUSE_SALT}
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL}
+      TELEMETRY_ENABLED: ${LANGFUSE_TELEMETRY_ENABLED}
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: ${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${LANGFUSE_PORT}:${LANGFUSE_PORT}"
+    networks:
+      - diploma
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/public/health"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+      start_interval: 5s
+
+volumes:
+  postgres_data_diploma:
+  pgadmin_data_diploma:
+
+networks:
+  diploma:
+    driver: bridge # or "local"
+\end{lstlisting}
+
+\clearpage
+
+\chapter{Code listing of frontend service part}
+
+File path - ``src/components.py'':
+\begin{lstlisting}
+import streamlit as st
+
+from src.schemas.users import UserCreate
+from src.schemas.auth import UserAuth
+from src.api.auth import AuthAPI
+from src.api.users import UserAPI
+from src.api.chats import ChatAPI
+
+def init_page():
+    # Default page configs
+    st.set_page_config(
+        page_title="AIFC Chatbot portal",
+        page_icon="./src/assets/fma_favicon.png",
+        layout="centered",
+        initial_sidebar_state="expanded",
+    )
+
+    # Delete red line in header of streamlit
+    st.markdown(
+        """
+        <style>
+        [data-testid="stDecoration"]
+        {
+            display: none;
+        }
+        </style>""",
+        unsafe_allow_html=True
+    )
+    
+    # Session states
+    if "access_token" not in st.session_state:
+        st.session_state["access_token"] = None
+    if "chat_button" not in st.session_state:
+        st.session_state["chat_button"] = False
+    if "chat_button_value" not in st.session_state:
+        st.session_state["chat_button_value"] = None
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+def show_user_form(cookie_service):
+    if not st.session_state["access_token"]:
+        login_tab, register_tab = st.tabs(["Login to account", "Register account"])
+        
+        with login_tab:
+            with st.form(key = "login_form"):
+                st.subheader("Login on AIFC Chatbot platform")
+                email_input = st.text_input("Email", placeholder="user@aifc.gov.kz")
+                password_input = st.text_input("Password", placeholder="************")
+                submit_button = st.form_submit_button("Login")
+                if submit_button:
+                    token = AuthAPI().create_token(
+                        cookie_service,
+                        auth_data=UserAuth(
+                            username=email_input,
+                            password=password_input,
+                        ),
+                    )
+                    st.info(token)
+        
+        with register_tab:
+            with st.form(key = "register_form"):
+                st.subheader("Register on AIFT Chatbot platform")
+                name_input = st.text_input("Full name", placeholder="Tendikov Noyan Maratovich")
+                email_input = st.text_input("Email", placeholder="user@aifc.gov.kz")
+                password_input = st.text_input("Password", placeholder="************")
+                submit_button = st.form_submit_button("Register")
+                if submit_button:
+                    user = AuthAPI().register_user(
+                        cookie_service,
+                        register_data=UserCreate(
+                            name=name_input,
+                            email=email_input,
+                            password=password_input,
+                        )
+                    )
+                    st.info(user)
+
+def show_main_page(token):
+    def click_chat_button(button_value):
+        st.session_state["chat_button"] = True
+        st.session_state["chat_button_value"] = button_value
+    
+    with st.sidebar.container(border=True):
+        st.title("AIFC Chatbot portal")
+        st.image("./src/assets/aifc_logo_transparent.png")
+    with st.sidebar.container(border=True):
+        user_api = UserAPI(token=token)
+        current_user_data = user_api.get_current_user()
+        st.text(current_user_data.get("name"))
+        st.text(current_user_data.get("email"))
+        st.text(current_user_data.get("role"))
+    
+    with st.sidebar.container(border=True):
+        chat_api = ChatAPI(token=token)
+        if st.button("Create new chat"):
+            chat_api.create_chat()
+        
+        with st.expander("Chat list"):
+            page_number = st.number_input("List of chats", min_value=1, step=1)
+            current_user_chats = chat_api.get_chats(page_number)            
+            for idx, result in enumerate(current_user_chats["results"]):
+                chat_button = st.button(result["uuid"], on_click=lambda x: click_chat_button(x), args=[result["uuid"]])
+               
+    with st.container():
+        messages = st.container(height=600)
+        if st.session_state["chat_button"]:
+            st.session_state.messages = []
+            
+            st.info(f"Chat UUID: {st.session_state['chat_button_value']}")
+            chat_messages = chat_api.get_chat_messages(chat_uuid=st.session_state["chat_button_value"]) 
+            for message in chat_messages["message"]:
+                if message["additional_metadata"]["tag"] == "user":
+                    with messages.chat_message("user"):
+                        st.write(message["content"])
+                        st.write(message["created_at"])
+                if message["additional_metadata"]["tag"] == "bot":
+                    with messages.chat_message("assistant"):
+                        st.write(message["content"])
+                        st.write(message["created_at"])
+                        for idx, context in enumerate(message["additional_metadata"]["context"]):
+                            with st.expander(context["metadata"]["title"]):
+                                source = context["metadata"]["source"]
+                                category = context["metadata"]["category"]
+                                language = context["metadata"]["language"]
+                                st.write(f"Source: {source}")
+                                st.write(f"Source type: {category}")
+                                st.write(f"Language: {language}")
+                                st.write(context["metadata"]["created_at"])
+                        
+        for message in st.session_state.messages:
+            messages.chat_message(message["role"]).write(message["content"])
+        if prompt := st.chat_input("Ask questions"): 
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            messages.chat_message("user").write(prompt)
+            bot_response = chat_api.create_chat_messages(
+                chat_uuid=st.session_state["chat_button_value"],
+                content=prompt,
+            )
+            messages.chat_message("assistant").write(bot_response["content"])
+            st.session_state.messages.append({"role": "assistant", "content": bot_response["content"]})
+        st.selectbox("Choose source", ("News", "Events", "General"))
+        st.selectbox("Choose language", ("English", "Russian", "Kazakh"))      
+\end{lstlisting}
+
+\clearpage
+
+File path - ``src/cookie.py'':
+\begin{lstlisting}
+from datetime import datetime
+
+import streamlit as st
+import jwt
+from extra_streamlit_components import CookieManager
+
+class CookieService():
+    def __init__(self):
+        self.cookie_service = CookieManager()
+    
+    def get_access_token(self):
+        cookies_list = self.cookie_service.get_all()
+        access_token = cookies_list.get("access_token")
+        return access_token
+    
+    def set_access_token(self, token: str):
+        decoded_jwt = jwt.decode(
+            jwt=token,
+            key=st.secrets.JWT_ACCESS_SECRET_KEY,
+            algorithms=st.secrets.JWT_ALGORITHM,
+        )
+        self.cookie_service.set(
+            cookie="access_token",
+            val=token,
+            expires_at=datetime.fromtimestamp(decoded_jwt["exp"]),
+            same_site = "lax"
+        )
+\end{lstlisting}
+
+\clearpage
+
+File path - ``src/main.py'':
+\begin{lstlisting}
+import streamlit as st
+
+from src.components import (
+    init_page,
+    show_user_form,
+    show_main_page
+)
+from src.cookie import CookieService
+
+def main():
+    init_page()
+    
+    cookie_service = CookieService()
+    access_token = cookie_service.get_access_token()
+    st.session_state["access_token"] = access_token
+    
+    if not access_token:
+        show_user_form(cookie_service)
+    else:
+        show_main_page(token=access_token)
+    
+if __name__ == "__main__":
+    main()
+    # start from /frontend directory with "python -m streamlit run src/main.py"
+\end{lstlisting}
+
+\clearpage
+

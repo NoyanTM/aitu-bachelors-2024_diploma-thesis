@@ -1,0 +1,90 @@
+% А4 = 210мм x 297мм.
+% 1in = 25.4mm.
+\hoffset=4.6mm          % Левая граница 3см = \in + \hoffset.
+\textwidth=170mm        % Ширина текста 170см = 210мм - 30мм - 10мм.
+\voffset=-5.4mm         % Верхняя граница 2см = \in + \voffset.
+\textheight=257mm       % Высота текста 257мм = 297мм - 20мм - 20мм.
+\oddsidemargin=0mm
+\evensidemargin=0mm
+\topmargin=0mm          % Верхний колонтитул.
+\headheight=0mm         % Верхний колонтитул.
+\headsep=0mm            % Верхний колонтитул.
+\footskip=4.5mm        % Отступ нижнего колонтитула.
+\footnotesep=0mm
+\sloppy
+\raggedbottom
+\nonfrenchspacing
+\righthyphenmin=2
+%\pagestyle{plain}      class defined
+%\markboth{}{}
+\setcounter {page} {2}  %% 3, 7
+
+\parindent=7.5mm        % Абзацный отступ.
+
+%\renewcommand{\baselinestretch}{1}
+
+\usepackage{mdwlist}    % Многострочные метки в листах
+
+% \usepackage{fancyvrb} % TODO: check
+% \usepackage{fvextra} % TODO: check
+\usepackage{listings} % TODO: check
+\lstset{breaklines=true} % TODO: check
+% \usepackage{spverbatim} % TODO: check
+
+\usepackage{caption}
+\DeclareCaptionLabelSeparator{colon}{~--~}                      % Разделитель в подписях.
+\DeclareCaptionJustification{raggedright}{\raggedright}         % Выравнивание по левому краю.
+\DeclareCaptionLabelFormat{tableLabelFormat}{\KZtablename\ #2}  % Подпись к таблицам.
+\DeclareCaptionLabelFormat{figureLabelFormat}{Figure #2}       % Подпись к рисункам.
+\DeclareCaptionStyle{tableStyle}{labelformat=tableLabelFormat, justification=raggedright, font=large, aboveskip=0ex}   % Стиль таблиц.
+\DeclareCaptionStyle{figureStyle}{labelformat=figureLabelFormat, justification=centering, font=large, aboveskip=13pt}   % Стиль рисунков.
+%\captionsetup[table]{position=bottom}
+
+\large
+% управление размещением плавающих объектов
+\setcounter {topnumber} {3}
+\setcounter {bottomnumber} {3}
+\setcounter {totalnumber} {4}
+\renewcommand {\topfraction} {.9}
+\renewcommand {\bottomfraction} {.9}
+\renewcommand {\textfraction} {.1}
+\renewcommand {\floatpagefraction} {.8}
+
+%\makeatletter
+%\@addtoreset {equation} {section}
+%\makeatother
+
+\renewcommand {\thechapter} {\arabic{chapter}}
+\renewcommand {\thesection} {\arabic{chapter}.\arabic{section}}
+\renewcommand {\thesubsection} {\arabic{chapter}.\arabic{section}.\arabic{subsection}}
+\renewcommand {\thesubsubsection} {\alph{subsubsection})}
+
+\setcounter {secnumdepth} {3}
+\setcounter {tocdepth} {2}
+
+% для раздвижки строк в gather, ...
+\newlength {\x}
+ \x=.4ex plus .1ex minus .1ex
+
+% знак транспонирования
+%  \newsavebox {\XXX}
+%  \sbox {\XXX} {\hbox{\Large$\scriptscriptstyle T$}}
+%\newcommand {\tran} {{\usebox{\XXX}}}
+
+%\def\endproc{\rm} % заканчивает теоремы и т.д.
+%\newcommand{\proof}{\par{\bf Доказательство.} }
+%\newcommand {\V} {\par\medskip\par} % перед и после теорем, лемм и т.д.
+
+%\newcommand {\rep} [1] {#1\discretionary{}{\hbox{$#1$}}{}}
+%\newcommand {\REP} [1] {#1\discretionary{}{\hbox{$#1$}}{}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%   Определяем знак полного дифференциала.
+\newcommand {\intd}{\mspace{3mu}\mathrm{d}}
+
+%   Переопределяем знаки неравенства согласно сов.стандарту.
+\renewcommand {\ge}  {\geqslant}
+\renewcommand {\geq} {\geqslant}
+\renewcommand {\le}  {\leqslant}
+\renewcommand {\leq} {\leqslant}
